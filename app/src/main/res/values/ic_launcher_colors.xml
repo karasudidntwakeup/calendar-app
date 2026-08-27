@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Expressive backdrop gradient -->
+    <color name="launcher_bg_start">#FFD0BCFF</color>
+    <color name="launcher_bg_end">#FF6750A4</color>
+    <!-- Countdown zigzag accent -->
+    <color name="zigzag_accent">#FF6750A4</color>
+</resources>
