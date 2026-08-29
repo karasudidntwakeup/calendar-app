@@ -29,6 +29,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".CollapsingHeaderActivity"
+            android:exported="false"
+            android:theme="@style/Theme.CalendarApp" />
+
         <receiver
             android:name=".TimerAlarmReceiver"
             android:exported="false" />

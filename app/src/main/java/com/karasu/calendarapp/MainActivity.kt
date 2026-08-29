@@ -36,7 +36,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -178,6 +180,10 @@ fun CalendarScreen() {
     var shownMonth by remember { mutableStateOf(Calendar.getInstance().get(Calendar.MONTH)) } // 0-based
     var selectedKey by remember { mutableStateOf("") }
 
+    // Hoisted so the swipe handler can tell when the task list is at its top
+    // (and a swipe-down should return to the calendar home instead of scrolling).
+    val todoListState = rememberLazyListState()
+
     fun persist() {
         TodoStore.saveAll(ctx, notes.toMap())
     }
@@ -216,22 +222,31 @@ fun CalendarScreen() {
                 .pointerInput(Unit) {
                     val threshold = with(density) { 24.dp.toPx() }
                     awaitEachGesture {
-                        awaitFirstDown()
+                        val down = awaitFirstDown()
                         var dx = 0f
                         var dy = 0f
+                        var prevX = down.position.x
+                        var prevY = down.position.y
                         while (true) {
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull() ?: break
-                            // Weight recent movement so fast flicks count more.
-                            dx += change.positionChange().x
-                            dy += change.positionChange().y
-                            change.consume()
+                            // Scrollables consume vertical drags, which makes
+                            // positionChange() report zero: track raw positions
+                            // so swipes are still detected everywhere.
+                            val x = change.position.x
+                            val y = change.position.y
+                            dx += x - prevX
+                            dy += y - prevY
+                            prevX = x
+                            prevY = y
 
                             val absX = abs(dx)
                             val absY = abs(dy)
                             when {
                                 absX >= threshold && absX >= absY -> {
-                                    // Dominant horizontal swipe.
+                                    // Dominant horizontal swipe (nothing else
+                                    // scrolls horizontally, so this is safe).
+                                    change.consume()
                                     if (dx > 0) {
                                         // Left-to-right -> previous day (or month).
                                         if (selectedKey.isEmpty()) shiftMonth(-1) else shiftDay(-1)
@@ -242,13 +257,21 @@ fun CalendarScreen() {
                                     break
                                 }
                                 absY >= threshold && absY >= absX -> {
-                                    // Dominant vertical swipe.
-                                    if (dy > 0) {
-                                        // Swipe down -> back to calendar home.
-                                        selectedKey = ""
+                                    if (selectedKey.isNotEmpty()) {
+                                        // A day's task list is showing. It owns
+                                        // vertical scrolling, but a swipe-down
+                                        // while already at the top goes home.
+                                        if (dy > 0 && !todoListState.canScrollBackward) {
+                                            change.consume()
+                                            selectedKey = ""
+                                        }
                                     } else {
-                                        // Swipe up -> open the focused date's tasks.
-                                        if (selectedKey.isEmpty()) {
+                                        // Calendar home: vertical is navigation.
+                                        change.consume()
+                                        if (dy > 0) {
+                                            // Swipe down on home -> nothing to scroll.
+                                        } else {
+                                            // Swipe up -> open the focused date's tasks.
                                             val t = Calendar.getInstance()
                                             selectedKey = TodoStore.keyFor(
                                                 t.get(Calendar.YEAR),
@@ -391,6 +414,7 @@ fun CalendarScreen() {
                     TodoSection(
                         dateKey = selectedKey,
                         entries = notes[selectedKey].orEmpty(),
+                        listState = todoListState,
                         onAdd = {
                             val list = notes[selectedKey].orEmpty().toMutableList()
                             val id = (notes.values.flatMap { it }.maxOfOrNull { it.id } ?: 0L) + 1
@@ -528,6 +552,7 @@ fun MonthGrid(
 fun TodoSection(
     dateKey: String,
     entries: List<TodoEntry>,
+    listState: LazyListState,
     onAdd: () -> Long,
     onChange: (List<TodoEntry>) -> Unit,
     onClose: () -> Unit,
@@ -571,6 +596,7 @@ fun TodoSection(
         }
 
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(6.dp),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp)
