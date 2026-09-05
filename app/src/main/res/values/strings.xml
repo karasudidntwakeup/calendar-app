@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">Calendar</string>
+    <string name="start">Start</string>
+    <string name="pause">Pause</string>
+    <string name="reset">Reset</string>
+    <string name="widget_timer_desc">Countdown with start, pause and time adjust.</string>
 </resources>

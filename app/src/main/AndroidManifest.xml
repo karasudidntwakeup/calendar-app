@@ -39,6 +39,23 @@
             android:exported="false" />
 
         <receiver
+            android:name=".TimerWidget"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.karasu.calendarapp.TIMER_WIDGET_START_PAUSE" />
+                <action android:name="com.karasu.calendarapp.TIMER_WIDGET_ADJUST" />
+                <action android:name="com.karasu.calendarapp.TIMER_WIDGET_RESET" />
+                <action android:name="com.karasu.calendarapp.TIMER_WIDGET_REFRESH" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_timer_info" />
+        </receiver>
+
+        
+
+        <receiver
             android:name=".TimerControlReceiver"
             android:exported="false" />
 

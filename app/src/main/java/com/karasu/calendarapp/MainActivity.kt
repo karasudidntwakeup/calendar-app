@@ -294,20 +294,13 @@ fun CalendarScreen() {
                 .padding(horizontal = 16.dp)
                 .padding(bottom = 140.dp)
         ) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
             Text(
-                text = Calendar.getInstance().let {
-                    String.format(Locale.US, "%s %d", MonthNames[it.get(Calendar.MONTH)], it.get(Calendar.YEAR))
-                },
+                text = android.text.format.DateFormat.format("EEEE, MMMM d, yyyy", System.currentTimeMillis()).toString(),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Black
             )
-            Text(
-                text = android.text.format.DateFormat.format("EEEE, MMMM d, yyyy", System.currentTimeMillis()).toString(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
 
             // Tapping the compact date label returns to the calendar (home) view.
             Surface(

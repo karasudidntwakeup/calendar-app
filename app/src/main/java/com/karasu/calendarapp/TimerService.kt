@@ -69,6 +69,9 @@ class TimerService : Service() {
                     notifyManager.notify(NOTIFICATION_ID, buildNotification())
                 } else {
                     TimerState.running = false
+                    TimerState.remainingMs = 25 * 60_000L
+                    TimerState.totalMs = 25 * 60_000L
+                    TimerState.targetTime = 0L
                     ticking = false
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()

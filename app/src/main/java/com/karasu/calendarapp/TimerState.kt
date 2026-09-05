@@ -23,6 +23,7 @@ object TimerState {
         targetTime = System.currentTimeMillis() + remainingMs
         totalMs = remainingMs
         running = true
+        TimerWidget.refresh(ctx)
 
         // Fire the ring through AlarmManager so it works even if the service
         // is killed mid-countdown.
@@ -45,6 +46,7 @@ object TimerState {
 
     fun cancel(ctx: Context) {
         running = false
+        TimerWidget.refresh(ctx)
         val pending = PendingIntent.getBroadcast(
             ctx, 1001, Intent(ctx, TimerAlarmReceiver::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
