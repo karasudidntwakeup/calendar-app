@@ -1,7 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Calendar</string>
-    <string name="start">Start</string>
-    <string name="pause">Pause</string>
-    <string name="reset">Reset</string>
-    <string name="widget_timer_desc">Countdown with start, pause and time adjust.</string>
+    <string name="widget_month_desc">Mini month calendar, tap any day to open it.</string>
+
+    <string-array name="month_names">
+        <item>January</item>
+        <item>February</item>
+        <item>March</item>
+        <item>April</item>
+        <item>May</item>
+        <item>June</item>
+        <item>July</item>
+        <item>August</item>
+        <item>September</item>
+        <item>October</item>
+        <item>November</item>
+        <item>December</item>
+    </string-array>
 </resources>

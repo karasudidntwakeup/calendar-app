@@ -1,7 +1,16 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Android 15/16/17 edge-to-edge: transparent bars, Compose draws behind
+         system bars via enableEdgeToEdge(). -->
     <style name="Theme.CalendarApp" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
+        <!-- Pre-Compose frame and the launcher splash: both follow the
+             day/night variant so opening from a widget never flashes white. -->
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:windowSplashScreenBackground" tools:targetApi="31">@color/window_background</item>
+        <!-- Newer attributes; ignored by older platforms that never had them. -->
+        <item name="android:enforceNavigationBarContrast" tools:targetApi="29">false</item>
+        <item name="android:windowOptOutEdgeToEdgeEnforcement" tools:targetApi="35">false</item>
     </style>
 </resources>

@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
-
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
@@ -9,7 +8,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.VIBRATE" />
-
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -17,53 +15,42 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.CalendarApp"
-        tools:targetApi="34">
-
+        android:enableOnBackInvokedCallback="true"
+        tools:targetApi="36">
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.CalendarApp">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <activity
-            android:name=".CollapsingHeaderActivity"
-            android:exported="false"
-            android:theme="@style/Theme.CalendarApp" />
-
         <receiver
             android:name=".TimerAlarmReceiver"
             android:exported="false" />
-
         <receiver
-            android:name=".TimerWidget"
+            android:name=".MonthWidget"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.karasu.calendarapp.TIMER_WIDGET_START_PAUSE" />
-                <action android:name="com.karasu.calendarapp.TIMER_WIDGET_ADJUST" />
-                <action android:name="com.karasu.calendarapp.TIMER_WIDGET_RESET" />
-                <action android:name="com.karasu.calendarapp.TIMER_WIDGET_REFRESH" />
+                <action android:name="android.intent.action.WALLPAPER_CHANGED" />
+                <action android:name="com.karasu.calendarapp.WIDGET_MONTH_PREV" />
+                <action android:name="com.karasu.calendarapp.WIDGET_MONTH_NEXT" />
+                <action android:name="com.karasu.calendarapp.WIDGET_MONTH_REFRESH" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
-                android:resource="@xml/widget_timer_info" />
+                android:resource="@xml/widget_month_info" />
         </receiver>
-
-        
-
         <receiver
             android:name=".TimerControlReceiver"
             android:exported="false" />
-
         <service
             android:name=".AlarmSoundService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
-
         <service
             android:name=".TimerService"
             android:exported="false"

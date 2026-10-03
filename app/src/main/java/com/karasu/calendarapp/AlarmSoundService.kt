@@ -14,7 +14,6 @@ import android.media.MediaPlayer
 import android.media.ToneGenerator
 import android.os.Build
 import android.os.IBinder
-import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.Log
@@ -66,17 +65,31 @@ class AlarmSoundService : Service() {
             Intent(this, AlarmSoundService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val snoozePending = PendingIntent.getService(
+            this, REQUEST_SNOOZE,
+            Intent(this, AlarmSoundService::class.java).setAction(ACTION_SNOOZE),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
         val notification: Notification =
             NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle("Timer")
-                .setContentText("Time is up! Tap to stop")
+                .setContentTitle("Time is up!")
+                .setContentText("Your focus timer finished")
+                .setStyle(
+                    NotificationCompat.BigTextStyle()
+                        .bigText("Your focus timer finished. Tap Stop to silence the alarm, or snooze for 5 more minutes.")
+                )
+                .setSubText("Calendar")
+                .setColor(getColor(R.color.zigzag_accent))
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setCategory(NotificationCompat.CATEGORY_ALARM)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setOngoing(true)
+                .setOnlyAlertOnce(true)
                 .setFullScreenIntent(stopPending, true)
                 .setContentIntent(stopPending)
+                .addAction(0, "Snooze 5 min", snoozePending)
                 .addAction(0, "Stop", stopPending)
                 .build()
 
@@ -102,8 +115,16 @@ class AlarmSoundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopRinging()
+        when (intent?.action) {
+            ACTION_STOP -> stopRinging()
+            ACTION_SNOOZE -> {
+                stopRinging()
+                // Fresh 5-minute countdown through the normal start path
+                // (alarm + live notification + widget refresh).
+                TimerState.remainingMs = SNOOZE_MS
+                TimerState.totalMs = SNOOZE_MS
+                TimerState.start(this)
+            }
         }
         return START_NOT_STICKY
     }
@@ -185,6 +206,9 @@ class AlarmSoundService : Service() {
         const val CHANNEL_ID = "timer_alarm_v2"
         const val NOTIFICATION_ID = 1002
         const val REQUEST_STOP = 1003
+        const val REQUEST_SNOOZE = 1006
         const val ACTION_STOP = "com.karasu.calendarapp.STOP_ALARM"
+        const val ACTION_SNOOZE = "com.karasu.calendarapp.SNOOZE_ALARM"
+        private const val SNOOZE_MS = 5 * 60_000L
     }
 }

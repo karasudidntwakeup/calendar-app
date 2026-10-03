@@ -19,10 +19,14 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,23 +42,24 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearWavyProgressIndicator
@@ -77,7 +82,6 @@ import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -88,13 +92,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
@@ -103,6 +113,25 @@ import java.util.Calendar
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
+
+    /** Current deep-link target; bumped on every fresh widget intent. */
+    private var deepLinkKey by mutableStateOf("")
+
+    /** Counts intents so the screen can tell one deep link from the next. */
+    private var deepLinkGen by mutableStateOf(0)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleDeepLink(intent)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        // Keep the opened day across rotation.
+        outState.putString(WidgetKit.EXTRA_DATE_KEY, deepLinkKey)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -124,9 +153,27 @@ class MainActivity : ComponentActivity() {
             } catch (_: Exception) {
             }
         }
-        setContent {
-            CalendarApp()
+        if (savedInstanceState == null) {
+            handleDeepLink(intent)
+        } else {
+            deepLinkKey = savedInstanceState.getString(WidgetKit.EXTRA_DATE_KEY).orEmpty()
         }
+        setContent {
+            // Read inside the composition: a widget tap (singleTask ->
+            // onNewIntent) re-targets the open day in place instead of tearing
+            // the whole screen down and rebuilding it.
+            CalendarApp(deepLinkKey = deepLinkKey, linkToken = deepLinkGen)
+        }
+    }
+
+    /**
+     * Parses the one-shot widget extra exactly once per intent, then strips it
+     * so rotation never replays it.
+     */
+    private fun handleDeepLink(intent: Intent) {
+        deepLinkKey = intent.getStringExtra(WidgetKit.EXTRA_DATE_KEY).orEmpty()
+        intent.removeExtra(WidgetKit.EXTRA_DATE_KEY)
+        deepLinkGen++
     }
 }
 
@@ -137,12 +184,11 @@ private val MonthNames = listOf(
 )
 
 @Composable
-fun CalendarApp() {
+fun CalendarApp(deepLinkKey: String = "", linkToken: Int = 0) {
     val ctx = LocalContext.current
     // Material You: follows the system wallpaper palette like matugen on the desktop.
-    val dark = (ctx.resources.configuration.uiMode and
-        android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
-        android.content.res.Configuration.UI_MODE_NIGHT_YES
+    // Recomposes by itself when the system flips dark mode.
+    val dark = isSystemInDarkTheme()
     val scheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         if (dark) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
     } else {
@@ -161,31 +207,89 @@ fun CalendarApp() {
         )
     ) {
         Surface(modifier = Modifier.fillMaxSize()) {
-            CalendarScreen()
+            CalendarScreen(deepLinkKey = deepLinkKey, linkToken = linkToken)
         }
     }
 }
 
 @Composable
-fun CalendarScreen() {
+fun CalendarScreen(deepLinkKey: String = "", linkToken: Int = 0) {
     val ctx = LocalContext.current
 
     val notes = remember { mutableStateMapOf<String, List<TodoEntry>>() }
     LaunchedEffect(Unit) {
+        // Yesterday's leftovers arrive in today before anything is drawn.
+        TodoStore.rollOverUnfinished(ctx)
         notes.clear()
         notes.putAll(TodoStore.loadAll(ctx))
+    }
+    // Staying open across midnight counts too: wake up, carry the leftovers
+    // over, repaint.
+    LaunchedEffect(Unit) {
+        while (true) {
+            val now = Calendar.getInstance()
+            val midnight = (now.clone() as Calendar).apply {
+                add(Calendar.DAY_OF_MONTH, 1)
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            delay((midnight.timeInMillis - now.timeInMillis).coerceAtLeast(1_000L))
+            TodoStore.rollOverUnfinished(ctx)
+            notes.clear()
+            notes.putAll(TodoStore.loadAll(ctx))
+            WidgetKit.refreshWidgets(ctx)
+        }
     }
 
     var shownYear by remember { mutableStateOf(Calendar.getInstance().get(Calendar.YEAR)) }
     var shownMonth by remember { mutableStateOf(Calendar.getInstance().get(Calendar.MONTH)) } // 0-based
-    var selectedKey by remember { mutableStateOf("") }
+    var selectedKey by remember { mutableStateOf(deepLinkKey) }
+
+    // A widget tap re-targets the open day (and the grid month that holds it)
+    // in place. Nothing is torn down, so there is no empty first frame.
+    LaunchedEffect(linkToken) {
+        selectedKey = deepLinkKey
+        val parts = deepLinkKey.split("-")
+        val year = parts.getOrNull(0)?.toIntOrNull()
+        val month = parts.getOrNull(1)?.toIntOrNull()
+        if (year != null && month != null) {
+            shownYear = year
+            shownMonth = month - 1
+        }
+    }
 
     // Hoisted so the swipe handler can tell when the task list is at its top
     // (and a swipe-down should return to the calendar home instead of scrolling).
     val todoListState = rememberLazyListState()
+    val monthListState = rememberLazyListState()
+
+    // Every task the grid month holds, earliest first: what fills the space
+    // under the calendar while no day is focused.
+    val monthPrefix = "%04d-%02d".format(shownYear, shownMonth + 1)
+    val monthTasks = notes
+        .filterKeys { it.startsWith(monthPrefix) }
+        .toSortedMap()
+        .flatMap { (key, list) ->
+            list.filter { it.text.isNotBlank() }.map { key to it }
+        }
+    val monthOpen = monthTasks.count { !it.second.done }
 
     fun persist() {
         TodoStore.saveAll(ctx, notes.toMap())
+        WidgetKit.refreshWidgets(ctx)
+    }
+
+    // Leaving a day drops blank drafts so ghost rows never linger.
+    fun dismissDay() {
+        val key = selectedKey
+        if (key.isNotEmpty()) {
+            val clean = notes[key].orEmpty().filter { it.text.isNotBlank() }
+            if (clean.isEmpty()) notes.remove(key) else notes[key] = clean
+            persist()
+            selectedKey = ""
+        }
     }
 
     fun shiftMonth(amount: Int) {
@@ -263,10 +367,13 @@ fun CalendarScreen() {
                                         // while already at the top goes home.
                                         if (dy > 0 && !todoListState.canScrollBackward) {
                                             change.consume()
-                                            selectedKey = ""
+                                            dismissDay()
                                         }
                                     } else {
-                                        // Calendar home: vertical is navigation.
+                                        // Calendar home: vertical is navigation,
+                                        // unless the month list is scrolled and
+                                        // wants the drag for itself.
+                                        if (monthListState.canScrollBackward) break
                                         change.consume()
                                         if (dy > 0) {
                                             // Swipe down on home -> nothing to scroll.
@@ -391,17 +498,21 @@ fun CalendarScreen() {
                 label = "taskFocus"
             ) { isHome ->
                 if (isHome) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "Tap a day to see its tasks",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    MonthTaskList(
+                        monthName = "${MonthNames[shownMonth]} $shownYear",
+                        tasks = monthTasks,
+                        openCount = monthOpen,
+                        listState = monthListState,
+                        onDayClick = { selectedKey = it },
+                        onCheck = { dayKey, entry ->
+                            val list = notes[dayKey].orEmpty()
+                            notes[dayKey] = list.map {
+                                if (it.id == entry.id) it.advance() else it
+                            }
+                            persist()
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
                 } else {
                     // Focused task view fills the remaining space.
                     TodoSection(
@@ -541,6 +652,162 @@ fun MonthGrid(
     }
 }
 
+/**
+ * The whole grid month at a glance: every task of every day, grouped under
+ * its date, filling the space under the calendar while no day is focused.
+ * Tapping a row jumps straight to that day.
+ */
+@Composable
+fun MonthTaskList(
+    monthName: String,
+    tasks: List<Pair<String, TodoEntry>>,
+    openCount: Int,
+    listState: LazyListState,
+    onDayClick: (String) -> Unit,
+    onCheck: (String, TodoEntry) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (tasks.isEmpty()) {
+        Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Text(
+                "Nothing planned in $monthName",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        return
+    }
+    Column(modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                monthName,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                "$openCount open",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 12.dp)
+        ) {
+            itemsIndexed(tasks) { index, (dayKey, entry) ->
+                // A header only when the date changes, so a day with three
+                // tasks shows its name once.
+                if (index == 0 || tasks[index - 1].first != dayKey) {
+                    Text(
+                        TodoStore.prettyDate(dayKey),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(start = 26.dp, top = 10.dp, bottom = 2.dp)
+                    )
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onDayClick(dayKey) }
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // The dot cycles the task on its own; the rest of the row
+                    // still opens that day.
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .clickable { onCheck(dayKey, entry) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        TaskStateDot(entry, size = 20.dp)
+                    }
+                    Text(
+                        entry.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (entry.done) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurface,
+                        textDecoration = if (entry.done) TextDecoration.LineThrough else null,
+                        maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The task's state as one circle: empty, split in half, or ticked. */
+@Composable
+fun TaskStateDot(entry: TodoEntry, scale: Float = 1f, size: Dp = 26.dp) {
+    val shape = Modifier
+        .size(size)
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+    when {
+        entry.done -> Box(
+            modifier = shape.clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Rounded.Check,
+                contentDescription = "Done",
+                tint = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(size * 0.6f)
+            )
+        }
+        entry.half -> HalfDoneCircle(
+            fill = MaterialTheme.colorScheme.primary,
+            ring = MaterialTheme.colorScheme.outlineVariant,
+            diameter = size
+        )
+        else -> Box(modifier = shape.border(2.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape))
+    }
+}
+
+/**
+ * The circle split in two: the left half is filled, the right half stays
+ * empty, with a divider down the middle.
+ */
+@Composable
+fun HalfDoneCircle(fill: Color, ring: Color, diameter: Dp = 26.dp) {
+    val stroke = with(LocalDensity.current) { 2.dp.toPx() }
+    Canvas(
+        modifier = Modifier
+            .size(diameter)
+    ) {
+        val inset = stroke / 2f
+        val diameter = size.minDimension - stroke
+        // Bottom-left quadrant pair = one clean half of the disc.
+        drawArc(
+            color = fill,
+            startAngle = 90f,
+            sweepAngle = 180f,
+            useCenter = true,
+            topLeft = Offset(inset, inset),
+            size = Size(diameter, diameter)
+        )
+        drawCircle(
+            color = ring,
+            radius = size.minDimension / 2f - inset,
+            style = Stroke(width = stroke)
+        )
+        drawLine(
+            color = fill,
+            start = Offset(size.width / 2f, inset),
+            end = Offset(size.width / 2f, size.height - inset),
+            strokeWidth = stroke
+        )
+    }
+}
+
 @Composable
 fun TodoSection(
     dateKey: String,
@@ -554,151 +821,261 @@ fun TodoSection(
     var editingId by remember(dateKey) { mutableStateOf<Long?>(null) }
     var draftText by remember(dateKey) { mutableStateOf("") }
 
-    val doneCount = entries.count { it.done }
+    // Blank drafts must never survive: leaving the day drops them so reopening
+    // never shows ghost rows or stale "0/1 tasks" counts.
+    fun closeClean() {
+        onChange(entries.filter { it.text.isNotBlank() })
+        editingId = null
+        onClose()
+    }
+
+    fun saveDraft(entry: TodoEntry) {
+        val text = draftText.trim()
+        onChange(
+            if (text.isEmpty()) entries.filterNot { it.id == entry.id }
+            else entries.map { if (it.id == entry.id) it.copy(text = text) else it }
+        )
+        editingId = null
+    }
+
+    fun startEditing(entry: TodoEntry) {
+        // Tapping another row while editing saves the open draft first.
+        entries.firstOrNull { it.id == editingId }?.let { open ->
+            val text = draftText.trim()
+            val updated =
+                if (text.isEmpty()) entries.filterNot { it.id == open.id }
+                else entries.map { if (it.id == open.id) it.copy(text = text) else it }
+            onChange(updated)
+        }
+        editingId = entry.id
+        draftText = entry.text
+    }
+
+    // Halved so a partly done task reads as "1.5" rather than "3".
+    val doneCount = entries.count { it.done } * 2 + entries.count { it.half }
+    val countLabel =
+        if (doneCount % 2 == 0) "${doneCount / 2}" else "${doneCount / 2}.5"
+    val visibleEntries = entries.filter { it.text.isNotBlank() || it.id == editingId }
     Column(modifier = modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                Icons.Default.Check,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.width(6.dp))
             Text(
                 text = TodoStore.prettyDate(dateKey),
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f)
             )
-            Text(
-                text = "$doneCount/${entries.size} tasks",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            // Add button lives in the header row so it never overlaps the list.
-            IconButton(onClick = {
-                val id = onAdd()
-                // Instantly open the editor for the freshly added task.
-                editingId = id
-                draftText = ""
-            }) {
-                Icon(Icons.Default.Add, contentDescription = "Add task")
+            // Count pill.
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer
+            ) {
+                Text(
+                    text = "$countLabel/${entries.size}",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                )
             }
-            IconButton(onClick = onClose) {
+            IconButton(onClick = { closeClean() }) {
                 Icon(Icons.Default.Close, contentDescription = "Back to calendar")
             }
         }
 
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp)
-        ) {
-            items(entries, key = { it.id }) { entry ->
-                val isEditing = editingId == entry.id
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainer)
-                        .clickable(enabled = !isEditing) {
-                            // Enter edit mode prefilled with the real text so
-                            // the task is never shown blank (which looked like
-                            // a duplicate/ghost row).
-                            editingId = entry.id
-                            draftText = entry.text
-                        }
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
+        if (visibleEntries.isEmpty()) {
+            // Empty state.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.secondaryContainer
                 ) {
-                    // Done checkbox
-                    Box(
+                    Icon(
+                        Icons.Rounded.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
                         modifier = Modifier
-                            .size(22.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(
-                                if (entry.done) MaterialTheme.colorScheme.primary
-                                else Color.Transparent
-                            )
-                            .border(
-                                width = 1.dp,
-                                color = if (entry.done) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.outline,
-                                shape = RoundedCornerShape(8.dp)
-                            )
-                            .clickable {
-                                onChange(entries.map {
-                                    if (it.id == entry.id) it.copy(done = !it.done) else it
-                                })
-                            },
-                        contentAlignment = Alignment.Center
+                            .padding(16.dp)
+                            .size(28.dp)
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "No tasks yet",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Tap Add task below to plan this day",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 12.dp)
+            ) {
+                items(visibleEntries, key = { it.id }) { entry ->
+                    val isEditing = editingId == entry.id
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainer)
+                            .clickable(enabled = !isEditing) { startEditing(entry) }
+                            .padding(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (entry.done) {
-                            Icon(
-                                Icons.Default.Check,
-                                contentDescription = "Done",
-                                tint = MaterialTheme.colorScheme.onPrimary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                    Spacer(Modifier.width(10.dp))
-
-                    if (isEditing) {
-                        val focusRequester = remember { FocusRequester() }
-                        LaunchedEffect(Unit) { focusRequester.requestFocus() }
-                        OutlinedTextField(
-                            value = draftText,
-                            onValueChange = { draftText = it },
-                            singleLine = true,
+                        // Modern circular toggle: bouncy pop on check, full
+                        // 48dp touch target. Three states - tap cycles
+                        // empty -> half -> done, so a partly finished task
+                        // can be recorded as such.
+                        val checkPop by animateFloatAsState(
+                            targetValue = when {
+                                entry.done -> 1f
+                                entry.half -> 0.9f
+                                else -> 0.8f
+                            },
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                stiffness = Spring.StiffnessMedium
+                            ),
+                            label = "checkPop"
+                        )
+                        Box(
                             modifier = Modifier
-                                .weight(1f)
-                                .focusRequester(focusRequester),
-                            textStyle = MaterialTheme.typography.bodyMedium,
-                            // Android 17 / expressive: pill-shaped filled field.
-                            shape = RoundedCornerShape(18.dp),
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                focusedIndicatorColor = Color.Transparent,
-                                unfocusedIndicatorColor = Color.Transparent,
-                                cursorColor = MaterialTheme.colorScheme.primary
-                            )
-                        )
-                        IconButton(onClick = {
-                            val text = draftText.trim()
-                            if (text.isNotEmpty()) {
-                                onChange(entries.map {
-                                    if (it.id == entry.id) it.copy(text = text) else it
-                                })
-                            } else {
-                                // Saving with no text drops the task entirely.
-                                onChange(entries.filterNot { it.id == entry.id })
-                            }
-                            editingId = null
-                        }) {
-                            Icon(Icons.Default.Check, contentDescription = "Save")
+                                .size(48.dp)
+                                .clickable { onChange(entries.map {
+                                    if (it.id == entry.id) it.advance() else it
+                                }) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            TaskStateDot(entry, scale = checkPop)
                         }
-                    } else {
-                        Text(
-                            text = entry.text,
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodyMedium,
-                            textDecoration = if (entry.done) TextDecoration.LineThrough else null,
-                            maxLines = 2
-                        )
-                        IconButton(onClick = {
-                            onChange(entries.filterNot { it.id == entry.id })
-                        }) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "Delete",
-                                tint = MaterialTheme.colorScheme.error
+
+                        if (isEditing) {
+                            val focusRequester = remember { FocusRequester() }
+                            LaunchedEffect(Unit) { focusRequester.requestFocus() }
+                            OutlinedTextField(
+                                value = draftText,
+                                onValueChange = { draftText = it },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .focusRequester(focusRequester),
+                                textStyle = MaterialTheme.typography.bodyLarge,
+                                placeholder = {
+                                    Text(
+                                        "New task",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Edit,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                },
+                                trailingIcon = {
+                                    // iOS-style inline clear.
+                                    if (draftText.isNotEmpty()) {
+                                        IconButton(onClick = { draftText = "" }) {
+                                            Icon(
+                                                Icons.Default.Close,
+                                                contentDescription = "Clear",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                },
+                                shape = RoundedCornerShape(0.dp),
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = Color.Transparent,
+                                    unfocusedContainerColor = Color.Transparent,
+                                    focusedIndicatorColor = Color.Transparent,
+                                    unfocusedIndicatorColor = Color.Transparent,
+                                    cursorColor = MaterialTheme.colorScheme.primary
+                                ),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                                keyboardActions = KeyboardActions(
+                                    onSend = { saveDraft(entry) }
+                                )
                             )
+                            Spacer(Modifier.width(8.dp))
+                            // iOS-style send bubble: grey when empty, blue when ready.
+                            val canSend = draftText.isNotBlank()
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (canSend) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.surfaceContainerHighest
+                                    )
+                                    .clickable(enabled = canSend) { saveDraft(entry) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.ArrowUpward,
+                                    contentDescription = "Save",
+                                    tint = if (canSend) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = entry.text,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (entry.done) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.onSurface,
+                                textDecoration = if (entry.done) TextDecoration.LineThrough else null,
+                                maxLines = 4,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                            IconButton(onClick = {
+                                onChange(entries.filterNot { it.id == entry.id })
+                            }) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = "Delete",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     }
                 }
             }
+        }
+
+        // Thumb-friendly add button; disabled while a draft is open.
+        FilledTonalButton(
+            onClick = {
+                val id = onAdd()
+                editingId = id
+                draftText = ""
+            },
+            enabled = editingId == null,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp)
+        ) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Add task")
         }
     }
 }

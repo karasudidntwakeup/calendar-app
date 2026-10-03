@@ -11,9 +11,9 @@ android {
     defaultConfig {
         applicationId = "com.karasu.calendarapp"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 4
-        versionName = "1.3"
+        targetSdk = 36
+        versionCode = 6
+        versionName = "1.5"
     }
 
     signingConfigs {

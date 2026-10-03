@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window is painted before Compose draws its first frame (and the
+         launcher shows it as the splash when a widget opens the app). It has to
+         match the dark scheme, so it lives here with a -night variant. -->
+    <color name="window_background">#FFFBFE</color>
+</resources>

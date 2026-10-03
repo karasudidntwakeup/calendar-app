@@ -12,6 +12,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,18 +25,31 @@ import kotlinx.coroutines.launch
  * Foreground service that owns the live countdown notification. It keeps
  * updating every 250 ms even when the app is backgrounded or its UI is
  * destroyed, and it schedules+fires the alarm via AlarmManager.
+ *
+ * The notification is the standard native template with a plain progress
+ * bar plus Pause/Resume, +1 min and Stop actions.
  */
 class TimerService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var ticking = false
 
+    /** True while paused via the notification: service stays foreground with
+     * a persistent card so Resume stays one tap away. */
+    private var paused = false
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startTicking()
+            ACTION_START -> {
+                paused = false
+                startTicking()
+            }
+            ACTION_PAUSE -> pauseTicking()
+            ACTION_SYNC -> syncNotification()
             ACTION_STOP -> {
+                paused = false
                 stopTicking()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -47,6 +61,7 @@ class TimerService : Service() {
     private fun startTicking() {
         if (ticking) return
         ticking = true
+        paused = false
         ensureChannel()
         val notif = buildNotification()
         try {
@@ -72,7 +87,9 @@ class TimerService : Service() {
                     TimerState.remainingMs = 25 * 60_000L
                     TimerState.totalMs = 25 * 60_000L
                     TimerState.targetTime = 0L
+                    TimerState.clearAlarmTarget(this@TimerService)
                     ticking = false
+                    paused = false
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                     break
@@ -82,78 +99,99 @@ class TimerService : Service() {
         }
     }
 
+    /** Freeze the countdown but keep the service foreground so the paused
+     * card (with Resume) stays visible. */
+    private fun pauseTicking() {
+        if (!ticking) return
+        ticking = false
+        paused = true
+        TimerState.remainingMs =
+            (TimerState.targetTime - System.currentTimeMillis()).coerceAtLeast(0L)
+        TimerState.running = false
+        (getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(alarmPending())
+        notifyManager.notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    /** Re-render the current card (used after +5 min while paused). */
+    private fun syncNotification() {
+        if (ticking || paused) {
+            notifyManager.notify(NOTIFICATION_ID, buildNotification())
+        } else {
+            stopSelf()
+        }
+    }
+
     private fun stopTicking() {
         ticking = false
-        val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        am.cancel(
-            PendingIntent.getBroadcast(
-                this, 1001, Intent(this, TimerAlarmReceiver::class.java),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        )
+        (getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(alarmPending())
         notifyManager.cancel(NOTIFICATION_ID)
     }
 
+    private fun alarmPending(): PendingIntent =
+        PendingIntent.getBroadcast(
+            this, 1001, Intent(this, TimerAlarmReceiver::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Drop the legacy LOW-importance channel so the countdown is
+            // always listed inline instead of minimized into the tray chip.
+            notifyManager.deleteNotificationChannel(COUNTDOWN_CHANNEL_ID_LEGACY)
             notifyManager.createNotificationChannel(
                 NotificationChannel(COUNTDOWN_CHANNEL_ID, "Timer running",
-                    NotificationManager.IMPORTANCE_LOW)
+                    NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "Live countdown with wavy progress and timer controls"
+                }
             )
         }
     }
+
+    private fun controlPending(action: String, requestCode: Int): PendingIntent =
+        PendingIntent.getBroadcast(
+            this, requestCode,
+            Intent(this, TimerControlReceiver::class.java).setAction(action),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
     private fun buildNotification(): Notification {
         val total = TimerState.totalMs.coerceAtLeast(1L)
         val remaining = TimerState.remainingMs.coerceAtLeast(0L)
-        val text = fmt(remaining)
+        val showPaused = paused && !ticking
+        val time = fmt(remaining)
+
         val openApp = PendingIntent.getActivity(
             this, 1004, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val stop = PendingIntent.getBroadcast(
-            this, 1005,
-            Intent(this, TimerControlReceiver::class.java)
-                .setAction(TimerControlReceiver.ACTION_STOP_COUNTDOWN),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val stop = controlPending(TimerControlReceiver.ACTION_STOP_COUNTDOWN, 1005)
+        val pauseResume = controlPending(TimerControlReceiver.ACTION_PAUSE_RESUME, 2005)
+        val add1 = controlPending(TimerControlReceiver.ACTION_ADD_1_MIN, 2006)
 
-        // Android 16+: expressive wavy/zigzag progress bar built with the
-        // framework builder. Pre-Baklava falls back to the standard linear
-        // progress bar via NotificationCompat.
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
-            val accent = getColor(R.color.zigzag_accent)
-            val gray = getColor(android.R.color.darker_gray)
-            val style = Notification.ProgressStyle()
-                .setProgress(total.toInt())
-                .setProgressSegments(
-                    listOf(
-                        Notification.ProgressStyle.Segment(remaining.toInt()).setColor(accent),
-                        Notification.ProgressStyle.Segment((total - remaining).toInt()).setColor(gray)
-                    )
-                )
-            Notification.Builder(this, COUNTDOWN_CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle("Timer running")
-                .setContentText(text)
-                .setOngoing(true)
-                .setOnlyAlertOnce(true)
-                .setContentIntent(openApp)
-                .addAction(0, "Stop", stop)
-                .setStyle(style)
-                .build()
-        } else {
-            androidx.core.app.NotificationCompat.Builder(this, COUNTDOWN_CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle("Timer running")
-                .setContentText(text)
-                .setProgress(total.toInt(), remaining.toInt(), false)
-                .setOngoing(true)
-                .setOnlyAlertOnce(true)
-                .setContentIntent(openApp)
-                .addAction(0, "Stop", stop)
-                .build()
-        }
+        // Classic native template: title + remaining time + straight
+        // progress bar, draining as the countdown runs.
+        return NotificationCompat.Builder(this, COUNTDOWN_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(if (showPaused) "Timer paused" else "Timer running")
+            .setContentText(time)
+            .setProgress(total.toInt(), remaining.toInt(), false)
+            .setShowWhen(false)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setColor(getColor(R.color.zigzag_accent))
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setContentIntent(openApp)
+            .addAction(
+                if (showPaused) android.R.drawable.ic_media_play
+                else android.R.drawable.ic_media_pause,
+                if (showPaused) "Resume" else "Pause",
+                pauseResume
+            )
+            .addAction(android.R.drawable.ic_input_add, "+1 min", add1)
+            .addAction(0, "Stop", stop)
+            .build()
     }
 
     private fun fmt(ms: Long): String {
@@ -174,9 +212,12 @@ class TimerService : Service() {
 
     companion object {
         private const val TAG = "TimerService"
-        private const val COUNTDOWN_CHANNEL_ID = "timer_progress"
+        private const val COUNTDOWN_CHANNEL_ID = "timer_progress_v2"
+        private const val COUNTDOWN_CHANNEL_ID_LEGACY = "timer_progress"
         const val NOTIFICATION_ID = 2001
         const val ACTION_START = "com.karasu.calendarapp.TIMER_START"
+        const val ACTION_PAUSE = "com.karasu.calendarapp.TIMER_PAUSE"
+        const val ACTION_SYNC = "com.karasu.calendarapp.TIMER_SYNC"
         const val ACTION_STOP = "com.karasu.calendarapp.TIMER_STOP"
     }
 }
